@@ -307,7 +307,7 @@
         // ========================================
         // MQTT Connection
         // ========================================
-       function connectMQTT() {
+        function connectMQTT() {
             const clientId = "SmartHomeDashboard_" + Math.random().toString(16).substr(2, 8);
             mqttClient = new Paho.MQTT.Client(MQTT_BROKER, MQTT_PORT, clientId);
             
@@ -330,23 +330,24 @@
                 }
             };
             
-      mqttClient.connect({
-		useSSL: true,
-        timeout: 5,
-        onSuccess: () => {
-            mqttConnected = true;
-            updateMQTTStatus(true);
-            addLog("MQTT connected successfully (HiveMQ Secure)");
-            mqttClient.subscribe(MQTT_TOPIC_STATUS);
-            addLog(`Subscribed to ${MQTT_TOPIC_STATUS}`);
-        },
-        onFailure: (error) => {
-            mqttConnected = false;
-            updateMQTTStatus(false);
-            addLog(`MQTT connection failed: ${error.errorMessage}`);
-            setTimeout(connectMQTT, 5000);
-        });
-        }
+			mqttClient.connect({
+			useSSL: true,
+			timeout: 5,
+			onSuccess: () => {
+				mqttConnected = true;
+				updateMQTTStatus(true);
+				addLog("MQTT connected successfully (HiveMQ Secure)");
+				mqttClient.subscribe(MQTT_TOPIC_STATUS);
+				addLog(`Subscribed to ${MQTT_TOPIC_STATUS}`);
+			},
+			onFailure: (error) => {
+				mqttConnected = false;
+				updateMQTTStatus(false);
+				addLog(`MQTT connection failed: ${error.errorMessage}`);
+				setTimeout(connectMQTT, 5000);
+			}
+			});
+		}
 
         // ========================================
         // Update MQTT Status Display
