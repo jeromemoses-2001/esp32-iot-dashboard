@@ -813,7 +813,7 @@
             doorAnimation.classList.add('active');
 
             setTimeout(() => {
-                window.location.href = 'dashboard.html';
+                window.location.href = 'dashboard_mqtt_integrated.html';
             }, 2000);
         };
 
@@ -846,9 +846,9 @@
             }
 
             const validCredentials = {
-                admin: 'admin123',
-                user: 'user123',
-                guest: 'guest123'
+                admin: 'admin@123',
+                user: 'user@123',
+                guest: 'guest@123'
             };
 
             if (password !== validCredentials[role]) {
