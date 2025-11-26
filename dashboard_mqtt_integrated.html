@@ -260,6 +260,12 @@
             font-size: .9rem;
             color: #aefeff
         }
+
+        .device-info {
+            font-size: .75rem;
+            color: #aaa;
+            margin-top: .2rem
+        }
     </style>
 </head>
 <body>
@@ -273,7 +279,10 @@
         <div class="panel"><div class="rooms" id="rooms"></div></div>
         <div class="panel" style="display:flex;flex-direction:column;gap:12px">
             <div class="panel" style="padding:12px"><div style="font-size:.95rem">Summary</div><div id="summary" style="font-weight:700;font-size:1.3rem;margin-top:6px">0 ON</div></div>
-            <div id="mqttArea" class="panel" style="padding:12px;text-align:center"><div class="mqtt-status mqtt-disconnected" id="mqttStatus">🔴 MQTT Disconnected</div></div>
+            <div id="mqttArea" class="panel" style="padding:12px;text-align:center">
+                <div class="mqtt-status mqtt-disconnected" id="mqttStatus">🔴 MQTT Disconnected</div>
+                <div style="font-size:.8rem;color:#aaa;margin-top:.5rem" id="mqttDetails">Connecting...</div>
+            </div>
             <div class="panel voice-panel">
                 <h3 style="margin-bottom:.5rem">🎙️ Voice Command</h3>
                 <button class="voice-btn" onclick="startVoiceCommand()">Start Listening</button>
@@ -286,15 +295,17 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
     <script>
         // ========================================
-        // MQTT CONFIGURATION
+        // MQTT CONFIGURATION - SYNCED WITH ESP32
         // ========================================
         const MQTT_HOST = "broker.hivemq.com";
-        const MQTT_PORT_WSS = 8000;
+        const MQTT_PORT_WSS = 8884; // WebSocket Secure port
         const MQTT_TOPIC_CONTROL = "smarthome/control";
         const MQTT_TOPIC_STATUS = "smarthome/status";
+        const MQTT_TOPIC_LED_CONTROL = "smarthome/led/control";
 
         let mqttClient = null;
         let mqttConnected = false;
+        let reconnectTimer = null;
 
         // ========================================
         // USER INFO
@@ -306,56 +317,109 @@
         const logBox = document.getElementById("logBox");
 
         // ========================================
-        // DEVICES - MATCHING ESP32 CODE
+        // DEVICES - MATCHING ESP32 CODE EXACTLY
         // ========================================
         const rooms = [
-            { name: "Living Hall", devices: [{ id: "living_light", label: "Light", color: "#ff4d4d", state: false }, { id: "living_fan", label: "Fan", color: "#7f8cff", state: false }] },
-            { name: "Kitchen", devices: [{ id: "kitchen_light", label: "Light", color: "#34d399", state: false }], temperature: 26.0 },
-            { name: "Bedroom 1", devices: [{ id: "bed1_light", label: "Light", color: "#ffd166", state: false }, { id: "bed1_fan", label: "Fan", color: "#7f8cff", state: false }] },
-            { name: "Bedroom 2", devices: [{ id: "bed2_light", label: "Light", color: "#b388eb", state: false }, { id: "bed2_fan", label: "Fan", color: "#7f8cff", state: false }] },
-            { name: "Buzzer Control", devices: [{ id: "buzzer", label: "Buzzer", color: "#ff3333", state: false, isBuzzer: true }] }
+            {
+                name: "Kitchen",
+                devices: [
+                    { id: "kitchen_light", label: "Light", color: "#34d399", state: false, isReal: true }
+                ],
+                temperature: 26.0
+            },
+            {
+                name: "Bedroom 1",
+                devices: [
+                    { id: "bed1_light", label: "Light", color: "#ffd166", state: false, isReal: true }
+                ]
+            },
+            {
+                name: "Living Hall",
+                devices: [
+                    { id: "living_light", label: "Light", color: "#ff4d4d", state: false, isReal: true }
+                ]
+            },
+            {
+                name: "LED Control",
+                devices: [
+                    { id: "led", label: "LED Strip", color: "#7f8cff", state: false, isReal: true }
+                ]
+            },
+            {
+                name: "Buzzer Control",
+                devices: [
+                    { id: "buzzer", label: "Buzzer", color: "#ff3333", state: false, isBuzzer: true, isReal: true }
+                ]
+            }
         ];
 
         // ========================================
-        // MQTT CONNECT
+        // MQTT CONNECT WITH BETTER ERROR HANDLING
         // ========================================
         function connectMQTT() {
             const clientId = "SmartHomeDashboard_" + Math.random().toString(16).substr(2, 8);
+
+            addLog(`🔌 Connecting to ${MQTT_HOST}:${MQTT_PORT_WSS}...`);
+            document.getElementById("mqttDetails").textContent = `Connecting to ${MQTT_HOST}...`;
+
             mqttClient = new Paho.MQTT.Client(MQTT_HOST, MQTT_PORT_WSS, clientId);
 
-            mqttClient.onConnectionLost = () => {
+            mqttClient.onConnectionLost = (responseObject) => {
                 mqttConnected = false;
                 updateMQTTStatus(false);
-                addLog("MQTT connection lost");
-                setTimeout(connectMQTT, 5000);
+                addLog(`❌ Connection lost: ${responseObject.errorMessage}`);
+
+                // Auto-reconnect after 5 seconds
+                if (reconnectTimer) clearTimeout(reconnectTimer);
+                reconnectTimer = setTimeout(connectMQTT, 5000);
             };
 
             mqttClient.onMessageArrived = (message) => {
+                const topic = message.destinationName;
                 const payload = message.payloadString;
-                addLog(`📥 Received: ${payload}`);
+
+                console.log(`📥 MQTT Message [${topic}]: ${payload}`);
+
                 try {
                     const data = JSON.parse(payload);
                     updateDeviceStatesFromMQTT(data);
+                    addLog(`📥 Status updated from ESP32`);
                 }
                 catch (e) {
                     console.log("Non-JSON message:", payload);
+                    addLog(`📥 ${topic}: ${payload}`);
                 }
             };
 
             mqttClient.connect({
-                useSSL: false,
-                timeout: 5,
+                useSSL: true,
+                timeout: 10,
+                keepAliveInterval: 60,
+                cleanSession: true,
                 onSuccess: () => {
                     mqttConnected = true;
                     updateMQTTStatus(true);
-                    addLog("✅ MQTT connected successfully");
+                    addLog("✅ MQTT connected successfully!");
+
+                    // Subscribe to topics
                     mqttClient.subscribe(MQTT_TOPIC_STATUS);
+                    mqttClient.subscribe(MQTT_TOPIC_CONTROL);
+                    addLog(`📡 Subscribed to ${MQTT_TOPIC_STATUS}`);
+
+                    // Request initial status from ESP32
+                    publishMQTT("status");
+
+                    document.getElementById("mqttDetails").textContent = `Connected to ${MQTT_HOST}`;
                 },
                 onFailure: (error) => {
                     mqttConnected = false;
                     updateMQTTStatus(false);
-                    addLog(`❌ MQTT failed: ${error.errorMessage}`);
-                    setTimeout(connectMQTT, 5000);
+                    addLog(`❌ Connection failed: ${error.errorMessage}`);
+                    document.getElementById("mqttDetails").textContent = `Failed: ${error.errorMessage}`;
+
+                    // Retry after 5 seconds
+                    if (reconnectTimer) clearTimeout(reconnectTimer);
+                    reconnectTimer = setTimeout(connectMQTT, 5000);
                 }
             });
         }
@@ -370,28 +434,53 @@
         }
 
         function publishMQTT(cmd) {
-            if (!mqttConnected) {
-                addLog("⚠️ MQTT not connected");
+            if (!mqttConnected || !mqttClient) {
+                addLog("⚠️ MQTT not connected - cannot send command");
                 return false;
             }
-            const m = new Paho.MQTT.Message(cmd);
-            m.destinationName = MQTT_TOPIC_CONTROL;
-            mqttClient.send(m);
-            addLog(`📤 Sent: ${cmd}`);
-            return true;
+
+            try {
+                const message = new Paho.MQTT.Message(cmd);
+                message.destinationName = MQTT_TOPIC_CONTROL;
+                message.qos = 0;
+                message.retained = false;
+
+                mqttClient.send(message);
+                addLog(`📤 Sent: ${cmd}`);
+                console.log(`📤 Published to ${MQTT_TOPIC_CONTROL}: ${cmd}`);
+                return true;
+            } catch (e) {
+                addLog(`❌ Failed to publish: ${e.message}`);
+                return false;
+            }
         }
 
         function updateDeviceStatesFromMQTT(data) {
-            // Update states based on ESP32 status messages
-            ["living_light", "kitchen_light", "bed1_light", "buzzer"].forEach(id => {
+            console.log("Updating device states:", data);
+
+            // Update all device states based on ESP32 status
+            ["living_light", "kitchen_light", "bed1_light", "led", "buzzer"].forEach(id => {
                 if (data[id] !== undefined) {
                     const dev = findDevice(id);
                     if (dev) {
-                        dev.state = data[id] === "on";
-                        render();
+                        const newState = data[id] === "on" || data[id] === true;
+                        if (dev.state !== newState) {
+                            dev.state = newState;
+                            console.log(`Updated ${id} to ${newState}`);
+                        }
                     }
                 }
             });
+
+            // Update temperature if available
+            if (data.temperature !== undefined) {
+                const kitchen = rooms.find(r => r.name === "Kitchen");
+                if (kitchen) {
+                    kitchen.temperature = parseFloat(data.temperature);
+                }
+            }
+
+            render();
         }
 
         function findDevice(id) {
@@ -404,8 +493,15 @@
 
         function addLog(msg) {
             const t = new Date().toLocaleTimeString();
-            logBox.innerHTML += `<p>[${t}] ${msg}</p>`;
+            const p = document.createElement('p');
+            p.textContent = `[${t}] ${msg}`;
+            logBox.appendChild(p);
             logBox.scrollTop = logBox.scrollHeight;
+
+            // Keep only last 50 messages
+            while (logBox.children.length > 50) {
+                logBox.removeChild(logBox.firstChild);
+            }
         }
 
         // ========================================
@@ -414,7 +510,7 @@
         function render() {
             const div = document.getElementById("rooms");
             div.innerHTML = "";
-            let on = 0;
+            let onCount = 0;
 
             rooms.forEach(r => {
                 const card = document.createElement("div");
@@ -430,10 +526,15 @@
                     const ind = document.createElement("div");
                     ind.className = "indicator " + (d.state ? "" : "off");
                     ind.style.background = d.state ? d.color : "";
-                    ind.textContent = d.label === "Light" ? "💡" : d.isBuzzer ? "🔔" : "🌀";
+
+                    // Icons
+                    if (d.label === "Light") ind.textContent = "💡";
+                    else if (d.isBuzzer) ind.textContent = "🔔";
+                    else if (d.id === "led") ind.textContent = "🌈";
+                    else ind.textContent = "🌀";
 
                     const lbl = document.createElement("div");
-                    lbl.textContent = d.label;
+                    lbl.innerHTML = d.label + (d.isReal ? ' <span class="device-info">ESP32</span>' : '');
 
                     const tg = document.createElement("div");
                     tg.className = "toggle " + (d.state ? "on" : "");
@@ -444,41 +545,31 @@
                     }
                     else {
                         tg.onclick = () => {
-                            // Only control real devices (living_light, kitchen_light, bed1_light, buzzer)
-                            if (["living_light", "kitchen_light", "bed1_light", "buzzer"].includes(d.id)) {
-                                const newState = !d.state;
-                                const cmd = `${d.id}_${newState ? "on" : "off"}`;
+                            const newState = !d.state;
+                            const cmd = `${d.id}_${newState ? "on" : "off"}`;
 
-                                if (publishMQTT(cmd)) {
-                                    tg.classList.toggle("on");
-                                    d.state = newState;
-                                    ind.classList.toggle("off", !d.state);
-                                    ind.style.background = d.state ? d.color : "";
-
-                                    if (d.isBuzzer && d.state) {
-                                        ind.classList.add("buzzer-pulse");
-                                        setTimeout(() => {
-                                            d.state = false;
-                                            ind.classList.remove("buzzer-pulse");
-                                            tg.classList.remove("on");
-                                            ind.classList.add("off");
-                                            ind.style.background = "";
-                                        }, 2000);
-                                    }
-
-                                    addLog(`${d.state ? "ON" : "OFF"} ${r.name} ${d.label}`);
-                                    updateSummary();
-                                }
-                            } else {
-                                // Virtual devices (fans, bed2_light)
+                            if (publishMQTT(cmd)) {
+                                // Optimistic UI update
+                                d.state = newState;
                                 tg.classList.toggle("on");
-                                d.state = !d.state;
                                 ind.classList.toggle("off", !d.state);
                                 ind.style.background = d.state ? d.color : "";
-                                addLog(`${d.state ? "ON" : "OFF"} ${r.name} ${d.label} (virtual)`);
+
+                                if (d.isBuzzer && d.state) {
+                                    ind.classList.add("buzzer-pulse");
+                                    setTimeout(() => {
+                                        d.state = false;
+                                        ind.classList.remove("buzzer-pulse");
+                                        tg.classList.remove("on");
+                                        ind.classList.add("off");
+                                        ind.style.background = "";
+                                    }, 2000);
+                                }
+
+                                addLog(`${d.state ? "ON" : "OFF"} ${r.name} ${d.label}`);
                                 updateSummary();
                             }
-                        }
+                        };
                     }
 
                     dv.appendChild(ind);
@@ -486,10 +577,10 @@
                     dv.appendChild(tg);
                     card.appendChild(dv);
 
-                    if (d.state) on++;
+                    if (d.state) onCount++;
                 });
 
-                if (r.name === "Kitchen") {
+                if (r.name === "Kitchen" && r.temperature !== undefined) {
                     const t = document.createElement("div");
                     t.className = "temp-panel";
                     t.id = "kitchenTemp";
@@ -500,26 +591,22 @@
                 div.appendChild(card);
             });
 
-            updateSummary();
+            // Update summary count
+            const e = document.getElementById("summary");
+            e.textContent = `${onCount} ON`;
         }
 
         function updateSummary() {
-            let on = 0;
-            rooms.forEach(r => r.devices.forEach(d => { if (d.state) on++; }));
+            let onCount = 0;
+            rooms.forEach(r => r.devices.forEach(d => {
+                if (d.state) onCount++;
+            }));
+
             const e = document.getElementById("summary");
-            e.textContent = `${on} ON`;
+            e.textContent = `${onCount} ON`;
             e.style.transition = "transform .2s";
             e.style.transform = "scale(1.1)";
             setTimeout(() => e.style.transform = "scale(1)", 200);
-        }
-
-        function updateTemp() {
-            const k = rooms.find(r => r.name === "Kitchen");
-            if (!k) return;
-            k.temperature += Math.random() - .5;
-            k.temperature = parseFloat(k.temperature.toFixed(1));
-            const e = document.getElementById("kitchenTemp");
-            if (e) e.textContent = `🌡️ ${k.temperature.toFixed(1)} °C`;
         }
 
         // ========================================
@@ -528,6 +615,7 @@
         function startVoiceCommand() {
             if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
                 addLog("⚠️ Voice recognition not supported");
+                document.getElementById("voiceResult").textContent = "⚠️ Not supported in this browser";
                 return;
             }
 
@@ -537,10 +625,12 @@
             recognition.maxAlternatives = 1;
 
             document.getElementById("voiceResult").textContent = "🎤 Listening...";
+            addLog("🎤 Voice recognition started");
 
             recognition.onresult = (event) => {
                 const voiceInput = event.results[0][0].transcript.toLowerCase();
                 document.getElementById("voiceResult").textContent = `🎤 Heard: "${voiceInput}"`;
+                addLog(`🎤 Heard: "${voiceInput}"`);
                 processVoiceCommand(voiceInput);
             };
 
@@ -555,22 +645,36 @@
         function processVoiceCommand(input) {
             let command = null;
 
-            // Parse voice commands
-            if (input.includes("kitchen") && input.includes("on")) command = "kitchen_light_on";
-            else if (input.includes("kitchen") && input.includes("off")) command = "kitchen_light_off";
-            else if (input.includes("bedroom") && input.includes("on")) command = "bed1_light_on";
-            else if (input.includes("bedroom") && input.includes("off")) command = "bed1_light_off";
-            else if (input.includes("living") && input.includes("on")) command = "living_light_on";
-            else if (input.includes("living") && input.includes("off")) command = "living_light_off";
-            else if (input.includes("all") && input.includes("on")) command = "all_on";
-            else if (input.includes("all") && input.includes("off")) command = "all_off";
-            else if (input.includes("buzzer")) command = "buzzer_on";
+            // Parse voice commands matching ESP32 commands
+            if (input.includes("kitchen") && (input.includes("on") || input.includes("turn on")))
+                command = "kitchen_light_on";
+            else if (input.includes("kitchen") && (input.includes("off") || input.includes("turn off")))
+                command = "kitchen_light_off";
+            else if (input.includes("bedroom") && (input.includes("on") || input.includes("turn on")))
+                command = "bed1_light_on";
+            else if (input.includes("bedroom") && (input.includes("off") || input.includes("turn off")))
+                command = "bed1_light_off";
+            else if (input.includes("living") && (input.includes("on") || input.includes("turn on")))
+                command = "living_light_on";
+            else if (input.includes("living") && (input.includes("off") || input.includes("turn off")))
+                command = "living_light_off";
+            else if (input.includes("led") && (input.includes("on") || input.includes("turn on")))
+                command = "led_on";
+            else if (input.includes("led") && (input.includes("off") || input.includes("turn off")))
+                command = "led_off";
+            else if (input.includes("all") && (input.includes("on") || input.includes("turn on")))
+                command = "all_on";
+            else if (input.includes("all") && (input.includes("off") || input.includes("turn off")))
+                command = "all_off";
+            else if (input.includes("buzzer") || input.includes("alarm"))
+                command = "buzzer_on";
 
             if (command) {
-                document.getElementById("voiceResult").textContent = `✅ Command: ${command}`;
+                document.getElementById("voiceResult").textContent = `✅ Executing: ${command}`;
                 publishMQTT(command);
             } else {
-                document.getElementById("voiceResult").textContent = `❓ Unknown command`;
+                document.getElementById("voiceResult").textContent = `❓ Unknown command: "${input}"`;
+                addLog(`❓ Unknown voice command: "${input}"`);
             }
         }
 
@@ -578,17 +682,37 @@
         // LOGOUT
         // ========================================
         document.getElementById("logoutBtn").onclick = () => {
-            if (mqttClient && mqttConnected) mqttClient.disconnect();
+            if (mqttClient && mqttConnected) {
+                mqttClient.disconnect();
+                addLog("👋 Disconnected from MQTT");
+            }
+            if (reconnectTimer) clearTimeout(reconnectTimer);
             localStorage.clear();
             location.href = "index.html";
         };
+
+        // ========================================
+        // PERIODIC STATUS REQUEST
+        // ========================================
+        function requestStatus() {
+            if (mqttConnected) {
+                publishMQTT("status");
+            }
+        }
 
         // ========================================
         // INIT
         // ========================================
         render();
         connectMQTT();
-        setInterval(updateTemp, 10000);
+
+        // Request status every 30 seconds
+        setInterval(requestStatus, 30000);
+
+        // Log startup
+        addLog("🚀 Dashboard initialized");
+        addLog(`📍 Broker: ${MQTT_HOST}:${MQTT_PORT_WSS}`);
+        addLog(`📡 Topics: ${MQTT_TOPIC_CONTROL}, ${MQTT_TOPIC_STATUS}`);
     </script>
 </body>
 </html>
