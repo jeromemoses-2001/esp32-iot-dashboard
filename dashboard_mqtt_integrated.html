@@ -289,7 +289,7 @@
         // MQTT CONFIGURATION
         // ========================================
         const MQTT_HOST = "broker.hivemq.com";
-        const MQTT_PORT_WSS = 8884;
+        const MQTT_PORT_WSS = 8000;
         const MQTT_TOPIC_CONTROL = "smarthome/control";
         const MQTT_TOPIC_STATUS = "smarthome/status";
 
@@ -343,7 +343,7 @@
             };
 
             mqttClient.connect({
-                useSSL: true,
+                useSSL: false,
                 timeout: 5,
                 onSuccess: () => {
                     mqttConnected = true;
