@@ -10,9 +10,11 @@ body{background:linear-gradient(-45deg,#05142d,#08284b,#08386c,#0a4e80);backgrou
 @keyframes bgmove{0%{background-position:0%50%}50%{background-position:100%50%}100%{background-position:0%50%}}
 header{display:flex;justify-content:space-between;align-items:center;padding:1rem 2rem;background:rgba(255,255,255,0.04);backdrop-filter:blur(6px)}
 h1{font-size:1.2rem;display:flex;align-items:center;gap:10px}
-.user-info{font-size:.9rem;color:#dbeef7}
-.logout{background:#f44;color:#fff;border:none;padding:.4rem 1rem;border-radius:.4rem;cursor:pointer;transition:.3s}
-.logout:hover{background:#ff6666}
+.user-info{display:flex;align-items:center;gap:1rem}
+.user-badge{display:flex;align-items:center;gap:0.5rem;background:rgba(255,255,255,0.1);padding:0.5rem 1rem;border-radius:8px;font-size:0.9rem}
+.role-icon{font-size:1.2rem}
+.logout{background:#f44;color:#fff;border:none;padding:.5rem 1.2rem;border-radius:.4rem;cursor:pointer;transition:.3s;font-weight:600}
+.logout:hover{background:#ff6666;transform:translateY(-2px)}
 .main{flex:1;padding:1.5rem 2rem;display:grid;grid-template-columns:1fr 360px;gap:1rem;align-items:start}
 @media(max-width:980px){.main{grid-template-columns:1fr}}
 .panel{background:rgba(255,255,255,0.03);padding:1rem;border-radius:12px;backdrop-filter:blur(6px)}
@@ -39,6 +41,7 @@ h1{font-size:1.2rem;display:flex;align-items:center;gap:10px}
 .voice-panel{margin-top:1rem;padding:1rem;background:rgba(34,209,139,0.1);border-radius:8px}
 .voice-btn{padding:.6rem 1rem;border-radius:8px;background:#22d18b;color:#fff;font-weight:bold;cursor:pointer;border:none;width:100%;margin-bottom:.5rem;transition:.3s}
 .voice-btn:hover{background:#1ab876;transform:translateY(-2px)}
+.voice-btn:disabled{opacity:0.5;cursor:not-allowed}
 #voiceResult{margin-top:.5rem;font-size:.9rem;color:#aefeff;min-height:20px}
 .device-info{font-size:.75rem;color:#aaa;margin-top:.2rem}
 .listening-pulse{animation:pulse 1.5s ease-in-out infinite}
@@ -71,15 +74,20 @@ h1{font-size:1.2rem;display:flex;align-items:center;gap:10px}
 .weather-location{font-size:.8rem;color:#90caf9;margin-top:.5rem;text-align:center}
 .weather-update-time{font-size:.75rem;color:#64b5f6;text-align:center;margin-top:.3rem}
 .weather-loading{text-align:center;padding:1rem;color:#81d4fa}
-.demo-banner{background:linear-gradient(135deg,#ff6b6b,#ee5a6f);padding:.5rem;text-align:center;font-weight:bold;font-size:.85rem;animation:pulse 2s ease-in-out infinite}
+.access-denied{background:rgba(255,68,68,0.1);border:2px solid rgba(255,68,68,0.3);padding:1rem;border-radius:8px;color:#ff6b6b;text-align:center;font-weight:600;margin:1rem 0}
+.permission-badge{display:inline-block;background:rgba(255,165,0,0.2);color:#fbbf24;padding:0.3rem 0.6rem;border-radius:4px;font-size:0.75rem;margin-left:0.5rem}
 </style>
 </head>
 <body>
-<div class="demo-banner">🎮 DEMO MODE - Simulating ESP32 + MQTT Connection</div>
 <header>
 <h1>🏠 ESP32 Smart Home Dashboard</h1>
-<div class="user-info">Admin (demo@esp32)</div>
-<button class="logout" onclick="alert('Demo mode - logout disabled')">Logout</button>
+<div class="user-info">
+  <div class="user-badge">
+    <span class="role-icon" id="roleIcon">👤</span>
+    <span id="userDisplay">Guest</span>
+  </div>
+  <button class="logout" onclick="handleLogout()">Logout</button>
+</div>
 </header>
 
 <div class="main">
@@ -88,7 +96,7 @@ h1{font-size:1.2rem;display:flex;align-items:center;gap:10px}
 <div class="panel" style="padding:12px">
   <div style="font-size:.95rem">Summary</div>
   <div id="summary" style="font-weight:700;font-size:1.3rem;margin-top:6px">0 ON</div>
-  <div class="quick-actions">
+  <div class="quick-actions" id="quickActions">
     <button class="action-btn all-on" onclick="sendCommand('all_on')">💡 All ON</button>
     <button class="action-btn vacation" onclick="sendCommand('all_off')">🏖️ All OFF</button>
   </div>
@@ -109,7 +117,7 @@ h1{font-size:1.2rem;display:flex;align-items:center;gap:10px}
   <div class="mqtt-status mqtt-connected" id="mqttStatus">🟢 MQTT Connected (Demo)</div>
   <div style="font-size:.8rem;color:#aaa;margin-top:.5rem" id="mqttDetails">broker.hivemq.com:8884</div>
 </div>
-<div class="panel voice-panel">
+<div class="panel voice-panel" id="voicePanel">
   <h3 style="margin-bottom:.5rem">🎙️ Voice Command</h3>
   <button class="voice-btn" id="voiceBtn" onclick="startVoiceCommand()">🎙️ Start Listening</button>
   <button class="voice-btn" id="continuousBtn" onclick="toggleContinuousMode()" style="background:#394651">🔄 Continuous: OFF</button>
@@ -121,8 +129,170 @@ h1{font-size:1.2rem;display:flex;align-items:center;gap:10px}
 
 <script>
 // ========================================
-// DEMO MODE - Simulated ESP32 Integration
+// ROLE-BASED ACCESS CONTROL SYSTEM
 // ========================================
+
+// Current user session
+let currentUser = {
+  username: '',
+  role: '',
+  fullName: '',
+  permissions: {}
+};
+
+// Role permissions configuration
+const ROLE_PERMISSIONS = {
+  admin: {
+    canControl: true,
+    canViewAll: true,
+    canUseVoice: true,
+    canAccessWeather: true,
+    canViewLogs: true,
+    canUseQuickActions: true,
+    label: '👑 Administrator',
+    color: '#22d18b'
+  },
+  user: {
+    canControl: true,
+    canViewAll: true,
+    canUseVoice: true,
+    canAccessWeather: true,
+    canViewLogs: true,
+    canUseQuickActions: false,
+    label: '🧰 Standard User',
+    color: '#fbbf24'
+  },
+  guest: {
+    canControl: false,
+    canViewAll: true,
+    canUseVoice: false,
+    canAccessWeather: true,
+    canViewLogs: false,
+    canUseQuickActions: false,
+    label: '👁️ Guest',
+    color: '#94a3b8'
+  }
+};
+
+// Check authentication and load user session
+function checkAuthentication() {
+  const username = sessionStorage.getItem('username');
+  const role = sessionStorage.getItem('role');
+  const fullName = sessionStorage.getItem('fullName');
+  const sessionTimestamp = sessionStorage.getItem('sessionTimestamp');
+
+  if (!username || !role || !sessionTimestamp) {
+    // No valid session - redirect to login
+    window.location.href = 'index.html';
+    return false;
+  }
+
+  // Check session expiry (24 hours)
+  const SESSION_DURATION = 24 * 60 * 60 * 1000;
+  const elapsed = Date.now() - parseInt(sessionTimestamp);
+  
+  if (elapsed > SESSION_DURATION) {
+    addLog('⚠️ Session expired. Please login again.');
+    setTimeout(() => handleLogout(), 2000);
+    return false;
+  }
+
+  // Set current user
+  currentUser = {
+    username: username,
+    role: role,
+    fullName: fullName || username,
+    permissions: ROLE_PERMISSIONS[role] || ROLE_PERMISSIONS.guest
+  };
+
+  // Update UI with user info
+  updateUserDisplay();
+  applyRoleRestrictions();
+  
+  return true;
+}
+
+// Update user display in header
+function updateUserDisplay() {
+  const userDisplay = document.getElementById('userDisplay');
+  const roleIcon = document.getElementById('roleIcon');
+  
+  const roleConfig = ROLE_PERMISSIONS[currentUser.role];
+  
+  if (roleConfig) {
+    const roleEmoji = roleConfig.label.split(' ')[0];
+    roleIcon.textContent = roleEmoji;
+    userDisplay.textContent = `${currentUser.username} (${currentUser.role})`;
+    userDisplay.style.color = roleConfig.color;
+  }
+
+  addLog(`✅ Welcome ${currentUser.fullName} - ${roleConfig.label}`);
+  addLog(`🔑 Access Level: ${currentUser.role.toUpperCase()}`);
+}
+
+// Apply role-based restrictions to UI
+function applyRoleRestrictions() {
+  const perms = currentUser.permissions;
+
+  // Control device toggles
+  if (!perms.canControl) {
+    addLog('⚠️ Guest access - Device control disabled');
+  }
+
+  // Quick actions
+  const quickActions = document.getElementById('quickActions');
+  if (!perms.canUseQuickActions) {
+    quickActions.innerHTML = `
+      <div class="access-denied">
+        🔒 Quick Actions require User/Admin role
+      </div>
+    `;
+  }
+
+  // Voice commands
+  const voicePanel = document.getElementById('voicePanel');
+  if (!perms.canUseVoice) {
+    document.getElementById('voiceBtn').disabled = true;
+    document.getElementById('continuousBtn').disabled = true;
+    document.getElementById('voiceResult').innerHTML = `
+      <div style="color:#ff6b6b;text-align:center">
+        🔒 Voice commands require User/Admin role
+      </div>
+    `;
+  }
+
+  // Activity logs
+  if (!perms.canViewLogs) {
+    document.getElementById('logBox').innerHTML = `
+      <p style="color:#ff6b6b;text-align:center">
+        🔒 Activity logs require User/Admin role
+      </p>
+    `;
+  }
+
+  // Weather access (all roles have this)
+  if (!perms.canAccessWeather) {
+    document.getElementById('weatherPanel').style.display = 'none';
+  }
+}
+
+// Handle logout
+function handleLogout() {
+  addLog('👋 Logging out...');
+  
+  // Clear session
+  sessionStorage.clear();
+  
+  // Redirect to login
+  setTimeout(() => {
+    window.location.href = 'index.html';
+  }, 1000);
+}
+
+// ========================================
+// DEVICE CONTROL WITH PERMISSION CHECKS
+// ========================================
+
 let mqttConnected = true;
 let autoRestartEnabled = false;
 let recognition = null;
@@ -194,13 +364,17 @@ function updateWeatherDisplay() {
 }
 
 function refreshWeather() {
+  if (!currentUser.permissions.canAccessWeather) {
+    addLog('❌ Access denied - Insufficient permissions');
+    return;
+  }
+
   const btn = document.getElementById("weatherRefreshBtn");
   btn.disabled = true;
   btn.textContent = "⏳ Refreshing...";
   
-  addLog("🌤️ Fetching weather from Open-Meteo API...");
+  addLog("🌤️ Fetching weather data...");
   
-  // Simulate weather update
   setTimeout(() => {
     weatherData.temperature = 25 + Math.random() * 10;
     weatherData.windSpeed = 5 + Math.random() * 20;
@@ -245,12 +419,17 @@ function updateTimePrompt() {
   
   const promptDiv = document.getElementById("timePrompt");
   promptDiv.innerHTML = `
-    <h3>${icon} ${greeting}</h3>
+    <h3>${icon} ${greeting}, ${currentUser.username}!</h3>
     <p>${suggestion}</p>
   `;
 }
 
 function startVoiceCommand() {
+  if (!currentUser.permissions.canUseVoice) {
+    addLog('❌ Voice commands require User or Admin role');
+    return;
+  }
+
   if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
     document.getElementById("voiceResult").textContent = "⚠️ Voice not supported in this browser";
     addLog("⚠️ Voice recognition requires Chrome/Edge");
@@ -304,6 +483,11 @@ function startVoiceCommand() {
 }
 
 function toggleContinuousMode() {
+  if (!currentUser.permissions.canUseVoice) {
+    addLog('❌ Voice commands require User or Admin role');
+    return;
+  }
+
   autoRestartEnabled = !autoRestartEnabled;
   const btn = document.getElementById("continuousBtn");
   
@@ -351,9 +535,22 @@ function processVoiceCommand(input) {
 }
 
 function sendCommand(cmd) {
-  addLog(`📤 Sending MQTT: ${cmd}`);
+  // Check permissions for control commands
+  if ((cmd !== 'weather_update') && !currentUser.permissions.canControl) {
+    addLog(`❌ Access denied - ${currentUser.role} cannot control devices`);
+    alert('🔒 You do not have permission to control devices.\nPlease login as User or Admin.');
+    return;
+  }
+
+  // Check quick actions permission
+  if ((cmd === 'all_on' || cmd === 'all_off') && !currentUser.permissions.canUseQuickActions) {
+    addLog(`❌ Access denied - Quick actions require Admin role`);
+    alert('🔒 Quick actions are restricted to Administrators only.');
+    return;
+  }
+
+  addLog(`📤 ${currentUser.username} sent command: ${cmd}`);
   
-  // Simulate MQTT command processing
   if (cmd === "all_on") {
     rooms.forEach(r => r.devices.forEach(d => {
       if (!d.isBuzzer) d.state = true;
@@ -384,15 +581,11 @@ function sendCommand(cmd) {
   render();
 }
 
-function findDevice(id) {
-  for(const r of rooms) {
-    const d = r.devices.find(x => x.id === id);
-    if(d) return d;
-  }
-  return null;
-}
-
 function addLog(msg) {
+  if (!currentUser.permissions.canViewLogs) {
+    return;
+  }
+
   const t = new Date().toLocaleTimeString();
   const p = document.createElement('p');
   p.textContent = `[${t}] ${msg}`;
@@ -429,11 +622,18 @@ function render() {
       
       const tg = document.createElement("div");
       tg.className = "toggle " + (d.state ? "on" : "");
-      tg.onclick = () => {
-        const newState = !d.state;
-        const cmd = `${d.id}_${newState ? "on" : "off"}`;
-        sendCommand(cmd);
-      };
+      
+      // Apply permission check
+      if (!currentUser.permissions.canControl) {
+        tg.classList.add('disabled');
+        tg.style.cursor = 'not-allowed';
+      } else {
+        tg.onclick = () => {
+          const newState = !d.state;
+          const cmd = `${d.id}_${newState ? "on" : "off"}`;
+          sendCommand(cmd);
+        };
+      }
       
       dv.appendChild(ind);
       dv.appendChild(lbl);
@@ -457,20 +657,29 @@ function render() {
 }
 
 // Initialize
-render();
-updateTimePrompt();
-updateWeatherDisplay();
-setInterval(updateTimePrompt, 60000);
+if (checkAuthentication()) {
+  render();
+  updateTimePrompt();
+  updateWeatherDisplay();
+  setInterval(updateTimePrompt, 60000);
 
-addLog("🚀 Dashboard initialized");
-addLog("📍 MQTT Broker: broker.hivemq.com:8884");
-addLog("✅ Connected to ESP32 (Demo Mode)");
-addLog("💡 Click toggles or use voice commands");
+  addLog("🚀 Dashboard initialized");
+  addLog("📍 MQTT Broker: broker.hivemq.com:8884");
+  addLog("✅ Connected to ESP32 (Demo Mode)");
+  
+  if (currentUser.permissions.canControl) {
+    addLog("💡 Click toggles or use voice commands");
+  } else {
+    addLog("👁️ View-only mode - Device control disabled");
+  }
 
-// Simulate periodic status updates
-setInterval(() => {
-  addLog("📥 Periodic status sync from ESP32");
-}, 30000);
+  // Simulate periodic status updates
+  setInterval(() => {
+    if (currentUser.permissions.canViewLogs) {
+      addLog("📥 Periodic status sync from ESP32");
+    }
+  }, 30000);
+}
 </script>
 </body>
 </html>
