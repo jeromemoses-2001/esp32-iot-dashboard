@@ -71,15 +71,13 @@ h1{font-size:1.2rem;display:flex;align-items:center;gap:10px}
 .weather-location{font-size:.8rem;color:#90caf9;margin-top:.5rem;text-align:center}
 .weather-update-time{font-size:.75rem;color:#64b5f6;text-align:center;margin-top:.3rem}
 .weather-loading{text-align:center;padding:1rem;color:#81d4fa}
-.demo-banner{background:linear-gradient(135deg,#ff6b6b,#ee5a6f);padding:.5rem;text-align:center;font-weight:bold;font-size:.85rem;animation:pulse 2s ease-in-out infinite}
 </style>
 </head>
 <body>
-<div class="demo-banner">🎮 DEMO MODE - Simulating ESP32 + MQTT Connection</div>
 <header>
 <h1>🏠 ESP32 Smart Home Dashboard</h1>
-<div class="user-info">Admin (demo@esp32)</div>
-<button class="logout" onclick="alert('Demo mode - logout disabled')">Logout</button>
+<div class="user-info" id="userInfo"></div>
+<button class="logout" id="logoutBtn">Logout</button>
 </header>
 
 <div class="main">
@@ -106,8 +104,8 @@ h1{font-size:1.2rem;display:flex;align-items:center;gap:10px}
 
 <div class="time-prompt" id="timePrompt"></div>
 <div id="mqttArea" class="panel" style="padding:12px;text-align:center">
-  <div class="mqtt-status mqtt-connected" id="mqttStatus">🟢 MQTT Connected (Demo)</div>
-  <div style="font-size:.8rem;color:#aaa;margin-top:.5rem" id="mqttDetails">broker.hivemq.com:8884</div>
+  <div class="mqtt-status mqtt-disconnected" id="mqttStatus">🔴 MQTT Disconnected</div>
+  <div style="font-size:.8rem;color:#aaa;margin-top:.5rem" id="mqttDetails">Connecting...</div>
 </div>
 <div class="panel voice-panel">
   <h3 style="margin-bottom:.5rem">🎙️ Voice Command</h3>
@@ -119,34 +117,70 @@ h1{font-size:1.2rem;display:flex;align-items:center;gap:10px}
 </div>
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
 <script>
 // ========================================
-// DEMO MODE - Simulated ESP32 Integration
+// MQTT CONFIGURATION
 // ========================================
-let mqttConnected = true;
-let autoRestartEnabled = false;
+const MQTT_HOST = "broker.hivemq.com";
+const MQTT_PORT_WSS = 8884;
+const MQTT_TOPIC_CONTROL = "smarthome/control";
+const MQTT_TOPIC_STATUS = "smarthome/status";
+
+let mqttClient = null;
+let mqttConnected = false;
+let reconnectTimer = null;
+let pendingCommands = new Set();
+
+// ========================================
+// WEATHER DATA
+// ========================================
+let weatherData = {
+  temperature: null,
+  condition: null,
+  windSpeed: null,
+  windDirection: null,
+  city: null,
+  lastUpdate: null,
+  isValid: false
+};
+
+// ========================================
+// VOICE RECOGNITION GLOBALS
+// ========================================
 let recognition = null;
 let isListening = false;
+let listeningTimeout = null;
+let autoRestartEnabled = false;
+
+// ========================================
+// USER INFO & AUTHENTICATION CHECK
+// ========================================
+const username = localStorage.getItem("username");
+const role = localStorage.getItem("role");
+
+// Redirect if not logged in
+if (!username || !role) {
+  window.location.href = "index.html";
+}
+
+document.getElementById("userInfo").textContent = `${role.charAt(0).toUpperCase() + role.slice(1)} (${username})`;
 
 const logBox = document.getElementById("logBox");
 
-let weatherData = {
-  temperature: 28.5,
-  condition: "Clear sky",
-  windSpeed: 12.3,
-  windDirection: "NE",
-  city: "Bengaluru",
-  lastUpdate: new Date().toLocaleString(),
-  isValid: true
-};
-
+// ========================================
+// DEVICES - State managed by ESP32
+// ========================================
 const rooms = [
- { name: "Kitchen", devices: [{ id: "kitchen_light", label: "Light", color: "#34d399", state: false, isReal: true }], temperature: 28.5 },
+ { name: "Kitchen", devices: [{ id: "kitchen_light", label: "Light", color: "#34d399", state: false, isReal: true }], temperature: null },
  { name: "Bedroom 1", devices: [{ id: "bed1_light", label: "Light", color: "#ffd166", state: false, isReal: true }]},
  { name: "Living Hall", devices: [{ id: "living_light", label: "Light", color: "#ff4d4d", state: false, isReal: true }]},
  { name: "Buzzer Control", devices: [{ id: "buzzer", label: "Buzzer", color: "#ff3333", state: false, isBuzzer: true, isReal: true }]}
 ];
 
+// ========================================
+// WEATHER FUNCTIONS
+// ========================================
 function getWeatherIcon(condition) {
   if (!condition) return "🌡️";
   const c = condition.toLowerCase();
@@ -194,32 +228,27 @@ function updateWeatherDisplay() {
 }
 
 function refreshWeather() {
+  if (!mqttConnected) {
+    addLog("⚠️ MQTT not connected - cannot refresh weather");
+    return;
+  }
+  
   const btn = document.getElementById("weatherRefreshBtn");
   btn.disabled = true;
   btn.textContent = "⏳ Refreshing...";
   
-  addLog("🌤️ Fetching weather from Open-Meteo API...");
+  sendCommand("weather_update");
+  addLog("🌤️ Requesting weather update from ESP32...");
   
-  // Simulate weather update
   setTimeout(() => {
-    weatherData.temperature = 25 + Math.random() * 10;
-    weatherData.windSpeed = 5 + Math.random() * 20;
-    const conditions = ["Clear sky", "Partly cloudy", "Overcast", "Rain", "Thunderstorm"];
-    weatherData.condition = conditions[Math.floor(Math.random() * conditions.length)];
-    weatherData.lastUpdate = new Date().toLocaleString();
-    
-    updateWeatherDisplay();
-    
-    const kitchen = rooms.find(r => r.name === "Kitchen");
-    if (kitchen) kitchen.temperature = weatherData.temperature;
-    render();
-    
-    addLog("✅ Weather data updated successfully!");
     btn.disabled = false;
     btn.textContent = "🔄 Refresh";
-  }, 1500);
+  }, 10000);
 }
 
+// ========================================
+// TIME-BASED PROMPTS
+// ========================================
 function updateTimePrompt() {
   const now = new Date();
   const hour = now.getHours();
@@ -250,56 +279,119 @@ function updateTimePrompt() {
   `;
 }
 
-function startVoiceCommand() {
+// ========================================
+// VOICE RECOGNITION
+// ========================================
+function initVoiceRecognition() {
   if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-    document.getElementById("voiceResult").textContent = "⚠️ Voice not supported in this browser";
-    addLog("⚠️ Voice recognition requires Chrome/Edge");
-    return;
+    return null;
   }
   
+  const recog = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+  recog.lang = 'en-US';
+  recog.continuous = false;
+  recog.interimResults = true;
+  recog.maxAlternatives = 3;
+  
+  recog.onstart = () => {
+    isListening = true;
+    updateVoiceUI('listening');
+    addLog("🎤 Voice recognition started");
+    
+    listeningTimeout = setTimeout(() => {
+      if (isListening) {
+        recog.stop();
+        addLog("⏱️ Voice timeout (10s)");
+      }
+    }, 10000);
+  };
+  
+  recog.onresult = (event) => {
+    if (listeningTimeout) clearTimeout(listeningTimeout);
+    
+    const interim = Array.from(event.results)
+      .filter(result => !result.isFinal)
+      .map(result => result[0].transcript)
+      .join(' ');
+    
+    if (interim) {
+      document.getElementById("voiceResult").textContent = `🎤 Hearing: "${interim}..."`;
+    }
+    
+    const final = Array.from(event.results)
+      .filter(result => result.isFinal)
+      .map(result => result[0].transcript)
+      .join(' ');
+    
+    if (final) {
+      const voiceInput = final.toLowerCase().trim();
+      document.getElementById("voiceResult").textContent = `🎤 Heard: "${voiceInput}"`;
+      addLog(`🎤 Heard: "${voiceInput}"`);
+      
+      const success = processVoiceCommand(voiceInput);
+      
+      if (autoRestartEnabled && success) {
+        setTimeout(() => {
+          if (!isListening) startVoiceCommand();
+        }, 2000);
+      }
+    }
+  };
+  
+  recog.onerror = (event) => {
+    isListening = false;
+    updateVoiceUI('error');
+    if (listeningTimeout) clearTimeout(listeningTimeout);
+    
+    let errorMsg = 'Error';
+    if (event.error === 'no-speech') {
+      errorMsg = 'No speech detected';
+      if (autoRestartEnabled) setTimeout(() => startVoiceCommand(), 1500);
+    } else if (event.error === 'not-allowed') {
+      errorMsg = 'Microphone permission denied';
+      autoRestartEnabled = false;
+      document.getElementById("continuousBtn").textContent = "🔄 Continuous: OFF";
+      document.getElementById("continuousBtn").style.background = "#394651";
+    }
+    
+    addLog(`🎤 ${errorMsg}`);
+    document.getElementById("voiceResult").textContent = `⚠️ ${errorMsg}`;
+  };
+  
+  recog.onend = () => {
+    isListening = false;
+    updateVoiceUI('idle');
+    if (listeningTimeout) clearTimeout(listeningTimeout);
+    
+    if (autoRestartEnabled) {
+      setTimeout(() => startVoiceCommand(), 1000);
+    }
+  };
+  
+  return recog;
+}
+
+function startVoiceCommand() {
   if (!recognition) {
-    recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
-    recognition.lang = 'en-US';
-    recognition.continuous = false;
-    recognition.interimResults = true;
-    
-    recognition.onstart = () => {
-      isListening = true;
-      document.getElementById("voiceBtn").textContent = "⏹️ Stop Listening";
-      document.getElementById("voiceBtn").style.background = "#ff4444";
-      addLog("🎤 Voice recognition started");
-    };
-    
-    recognition.onresult = (event) => {
-      const transcript = Array.from(event.results)
-        .map(result => result[0].transcript)
-        .join('');
-      document.getElementById("voiceResult").textContent = `🎤 Heard: "${transcript}"`;
-      processVoiceCommand(transcript.toLowerCase());
-    };
-    
-    recognition.onerror = (event) => {
-      isListening = false;
-      document.getElementById("voiceBtn").textContent = "🎙️ Start Listening";
-      document.getElementById("voiceBtn").style.background = "#22d18b";
-      addLog(`⚠️ Voice error: ${event.error}`);
-    };
-    
-    recognition.onend = () => {
-      isListening = false;
-      document.getElementById("voiceBtn").textContent = "🎙️ Start Listening";
-      document.getElementById("voiceBtn").style.background = "#22d18b";
-    };
+    recognition = initVoiceRecognition();
+    if (!recognition) {
+      document.getElementById("voiceResult").textContent = "⚠️ Voice not supported";
+      addLog("⚠️ Voice recognition not supported");
+      return;
+    }
   }
   
   if (isListening) {
     recognition.stop();
-  } else {
-    try {
-      recognition.start();
-    } catch (e) {
-      addLog("⚠️ Voice recognition error");
-    }
+    return;
+  }
+  
+  try {
+    recognition.start();
+  } catch (e) {
+    console.error("Recognition error:", e);
+    isListening = false;
+    updateVoiceUI('error');
   }
 }
 
@@ -310,11 +402,36 @@ function toggleContinuousMode() {
   if (autoRestartEnabled) {
     btn.textContent = "🔄 Continuous: ON";
     btn.style.background = "#22d18b";
-    addLog("🔄 Continuous voice mode enabled");
+    addLog("🔄 Continuous mode enabled");
+    if (!isListening) startVoiceCommand();
   } else {
     btn.textContent = "🔄 Continuous: OFF";
     btn.style.background = "#394651";
-    addLog("⏸️ Continuous voice mode disabled");
+    addLog("⏸️ Continuous mode disabled");
+    if (isListening) recognition.stop();
+  }
+}
+
+function updateVoiceUI(state) {
+  const btn = document.getElementById("voiceBtn");
+  const result = document.getElementById("voiceResult");
+  
+  switch(state) {
+    case 'listening':
+      btn.textContent = "⏹️ Stop";
+      btn.style.background = "#ff4444";
+      btn.classList.add('listening-pulse');
+      break;
+    case 'idle':
+      btn.textContent = "🎙️ Start Listening";
+      btn.style.background = "#22d18b";
+      btn.classList.remove('listening-pulse');
+      break;
+    case 'error':
+      btn.textContent = "🎙️ Start Listening";
+      btn.style.background = "#22d18b";
+      btn.classList.remove('listening-pulse');
+      break;
   }
 }
 
@@ -327,7 +444,7 @@ function processVoiceCommand(input) {
     'living_light_on': [/living.*on/, /hall.*on/],
     'living_light_off': [/living.*off/, /hall.*off/],
     'all_on': [/all.*on/, /everything.*on/],
-    'all_off': [/all.*off/, /everything.*off/],
+    'all_off': [/all.*off/, /everything.*off/, /vacation/],
     'buzzer_on': [/buzz(er)?/, /alarm/],
     'weather_update': [/weather/, /refresh weather/]
   };
@@ -344,133 +461,164 @@ function processVoiceCommand(input) {
   }
   
   if (command) {
+    document.getElementById("voiceResult").textContent = `✅ ${command.replace(/_/g, ' ')}`;
     sendCommand(command);
+    return true;
   } else {
-    addLog(`❓ Unknown voice command: "${input}"`);
+    document.getElementById("voiceResult").textContent = `❓ Unknown: "${input}"`;
+    addLog(`❓ Unknown: "${input}"`);
+    return false;
   }
 }
 
+// ========================================
+// COMMAND SENDING
+// ========================================
 function sendCommand(cmd) {
-  addLog(`📤 Sending MQTT: ${cmd}`);
-  
-  // Simulate MQTT command processing
-  if (cmd === "all_on") {
-    rooms.forEach(r => r.devices.forEach(d => {
-      if (!d.isBuzzer) d.state = true;
-    }));
-  } else if (cmd === "all_off") {
-    rooms.forEach(r => r.devices.forEach(d => {
-      if (!d.isBuzzer) d.state = false;
-    }));
-  } else if (cmd === "weather_update") {
-    refreshWeather();
-    return;
-  } else if (cmd === "buzzer_on") {
-    addLog("🔔 Buzzer activated!");
-    setTimeout(() => addLog("🔔 Buzzer stopped"), 500);
-  } else {
-    const parts = cmd.split('_');
-    const deviceId = parts.slice(0, -1).join('_');
-    const action = parts[parts.length - 1];
-    
-    rooms.forEach(r => r.devices.forEach(d => {
-      if (d.id === deviceId) {
-        d.state = (action === "on");
-      }
-    }));
+  if (!mqttConnected || !mqttClient) {
+    addLog("⚠️ MQTT not connected");
+    return false;
   }
   
-  addLog(`✅ Command executed: ${cmd}`);
-  render();
-}
-
-function findDevice(id) {
-  for(const r of rooms) {
-    const d = r.devices.find(x => x.id === id);
-    if(d) return d;
+  if (role === "guest") {
+    addLog("⚠️ Guest cannot control devices");
+    return false;
   }
-  return null;
-}
-
-function addLog(msg) {
-  const t = new Date().toLocaleTimeString();
-  const p = document.createElement('p');
-  p.textContent = `[${t}] ${msg}`;
-  logBox.appendChild(p);
-  logBox.scrollTop = logBox.scrollHeight;
-  while(logBox.children.length > 50) logBox.removeChild(logBox.firstChild);
-}
-
-function render() {
-  const div = document.getElementById("rooms");
-  div.innerHTML = "";
-  let onCount = 0;
   
-  rooms.forEach(r => {
-    const card = document.createElement("div");
-    card.className = "room";
-    const h = document.createElement("h2");
-    h.textContent = r.name;
-    card.appendChild(h);
+  try {
+    const message = new Paho.MQTT.Message(cmd);
+    message.destinationName = MQTT_TOPIC_CONTROL;
+    message.qos = 0;
+    message.retained = false;
+    mqttClient.send(message);
     
-    r.devices.forEach(d => {
-      const dv = document.createElement("div");
-      dv.className = "device";
-      
-      const ind = document.createElement("div");
-      ind.className = "indicator " + (d.state ? "" : "off");
-      ind.style.background = d.state ? d.color : "";
-      
-      if(d.label === "Light") ind.textContent = "💡";
-      else if(d.isBuzzer) ind.textContent = "🔔";
-      
-      const lbl = document.createElement("div");
-      lbl.innerHTML = d.label + ' <span class="device-info">ESP32</span>';
-      
-      const tg = document.createElement("div");
-      tg.className = "toggle " + (d.state ? "on" : "");
-      tg.onclick = () => {
-        const newState = !d.state;
-        const cmd = `${d.id}_${newState ? "on" : "off"}`;
-        sendCommand(cmd);
-      };
-      
-      dv.appendChild(ind);
-      dv.appendChild(lbl);
-      dv.appendChild(tg);
-      card.appendChild(dv);
-      
-      if(d.state && !d.isBuzzer) onCount++;
-    });
+    pendingCommands.add(cmd);
+    addLog(`📤 Sent: ${cmd}`);
     
-    if(r.name === "Kitchen" && r.temperature !== null) {
-      const t = document.createElement("div");
-      t.className = "temp-panel";
-      t.textContent = `🌡️ ${r.temperature.toFixed(1)} °C`;
-      card.appendChild(t);
+    setTimeout(() => pendingCommands.delete(cmd), 3000);
+    
+    disableToggles(true);
+    setTimeout(() => disableToggles(false), 500);
+    
+    return true;
+  } catch(e) {
+    addLog(`❌ Failed: ${e.message}`);
+    return false;
+  }
+}
+
+function disableToggles(disabled) {
+  document.querySelectorAll('.toggle').forEach(toggle => {
+    if (disabled) {
+      toggle.classList.add('disabled');
+      toggle.style.pointerEvents = 'none';
+    } else {
+      toggle.classList.remove('disabled');
+      toggle.style.pointerEvents = 'auto';
     }
+  });
+}
+
+// ========================================
+// MQTT FUNCTIONS
+// ========================================
+function connectMQTT() {
+  const clientId = "ESP32Dashboard_" + Math.random().toString(16).substr(2, 8);
+  addLog(`🔌 Connecting to ${MQTT_HOST}...`);
+  document.getElementById("mqttDetails").textContent = `Connecting...`;
+  
+  mqttClient = new Paho.MQTT.Client(MQTT_HOST, MQTT_PORT_WSS, clientId);
+
+  mqttClient.onConnectionLost = (responseObject) => {
+    mqttConnected = false;
+    updateMQTTStatus(false);
+    addLog(`❌ Connection lost`);
+    if(reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(connectMQTT, 5000);
+  };
+
+  mqttClient.onMessageArrived = (message) => {
+    const topic = message.destinationName;
+    const payload = message.payloadString;
+    console.log(`📥 [${topic}]: ${payload}`);
     
-    div.appendChild(card);
+    try { 
+      const data = JSON.parse(payload);
+      updateDeviceStatesFromMQTT(data);
+      updateWeatherFromMQTT(data);
+      addLog(`📥 Status updated`);
+    } catch(e) { 
+      console.log("Non-JSON:", payload);
+    }
+  };
+
+  mqttClient.connect({
+    useSSL: true,
+    timeout: 10,
+    keepAliveInterval: 60,
+    cleanSession: true,
+    onSuccess: () => {
+      mqttConnected = true;
+      updateMQTTStatus(true);
+      addLog("✅ MQTT connected!");
+      
+      mqttClient.subscribe(MQTT_TOPIC_STATUS);
+      mqttClient.subscribe(MQTT_TOPIC_CONTROL);
+      
+      sendCommand("status");
+      document.getElementById("mqttDetails").textContent = `${MQTT_HOST}`;
+    },
+    onFailure: (error) => {
+      mqttConnected = false;
+      updateMQTTStatus(false);
+      addLog(`❌ Failed: ${error.errorMessage}`);
+      document.getElementById("mqttDetails").textContent = `Failed`;
+      if(reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(connectMQTT, 5000);
+    }
+  });
+}
+
+function updateMQTTStatus(connected){
+  const s = document.getElementById("mqttStatus");
+  s.textContent = connected ? "🟢 MQTT Connected" : "🔴 MQTT Disconnected";
+  s.className = "mqtt-status " + (connected ? "mqtt-connected" : "mqtt-disconnected");
+}
+
+// ========================================
+// UPDATE FUNCTIONS
+// ========================================
+function updateDeviceStatesFromMQTT(data) {
+  let stateChanged = false;
+  
+  ["living_light", "kitchen_light", "bed1_light", "buzzer"].forEach(id => {
+    if (data[id] !== undefined) {
+      const dev = findDevice(id);
+      if (dev) {
+        const newState = data[id] === "on" || data[id] === true;
+        if (dev.state !== newState) {
+          dev.state = newState;
+          stateChanged = true;
+        }
+      }
+    }
   });
   
-  document.getElementById("summary").textContent = `${onCount} ON`;
+  if (data.temperature !== undefined) {
+    const kitchen = rooms.find(r => r.name === "Kitchen");
+    if (kitchen) {
+      kitchen.temperature = parseFloat(data.temperature);
+      stateChanged = true;
+    }
+  }
+  
+  if (stateChanged) {
+    render();
+  }
 }
 
-// Initialize
-render();
-updateTimePrompt();
-updateWeatherDisplay();
-setInterval(updateTimePrompt, 60000);
-
-addLog("🚀 Dashboard initialized");
-addLog("📍 MQTT Broker: broker.hivemq.com:8884");
-addLog("✅ Connected to ESP32 (Demo Mode)");
-addLog("💡 Click toggles or use voice commands");
-
-// Simulate periodic status updates
-setInterval(() => {
-  addLog("📥 Periodic status sync from ESP32");
-}, 30000);
-</script>
-</body>
-</html>
+function updateWeatherFromMQTT(data) {
+  let weatherUpdated = false;
+  
+  if (data.temperature !== undefined) {
+    weatherData.temperature
