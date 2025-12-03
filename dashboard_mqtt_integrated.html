@@ -44,8 +44,6 @@ h1{font-size:1.2rem;display:flex;align-items:center;gap:10px}
 .voice-btn:disabled{opacity:0.5;cursor:not-allowed}
 #voiceResult{margin-top:.5rem;font-size:.9rem;color:#aefeff;min-height:20px}
 .device-info{font-size:.75rem;color:#aaa;margin-top:.2rem}
-.listening-pulse{animation:pulse 1.5s ease-in-out infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
 .time-prompt{background:linear-gradient(135deg,rgba(138,43,226,0.15),rgba(75,0,130,0.15));padding:1rem;border-radius:10px;margin-bottom:1rem;border-left:4px solid #8a2be2;box-shadow:0 4px 12px rgba(138,43,226,0.2)}
 .time-prompt h3{font-size:.95rem;margin-bottom:.4rem;color:#dda0dd}
 .time-prompt p{font-size:.85rem;color:#e6e6fa;line-height:1.4}
@@ -75,7 +73,8 @@ h1{font-size:1.2rem;display:flex;align-items:center;gap:10px}
 .weather-update-time{font-size:.75rem;color:#64b5f6;text-align:center;margin-top:.3rem}
 .weather-loading{text-align:center;padding:1rem;color:#81d4fa}
 .access-denied{background:rgba(255,68,68,0.1);border:2px solid rgba(255,68,68,0.3);padding:1rem;border-radius:8px;color:#ff6b6b;text-align:center;font-weight:600;margin:1rem 0}
-.permission-badge{display:inline-block;background:rgba(255,165,0,0.2);color:#fbbf24;padding:0.3rem 0.6rem;border-radius:4px;font-size:0.75rem;margin-left:0.5rem}
+.buzzer-pulse{animation:pulseRed 1.2s infinite alternate}
+@keyframes pulseRed{from{box-shadow:0 0 6px #ff3333,0 0 12px #ff3333}to{box-shadow:0 0 20px #ff0000,0 0 30px #ff0000}}
 </style>
 </head>
 <body>
@@ -114,8 +113,8 @@ h1{font-size:1.2rem;display:flex;align-items:center;gap:10px}
 
 <div class="time-prompt" id="timePrompt"></div>
 <div id="mqttArea" class="panel" style="padding:12px;text-align:center">
-  <div class="mqtt-status mqtt-connected" id="mqttStatus">🟢 MQTT Connected (Demo)</div>
-  <div style="font-size:.8rem;color:#aaa;margin-top:.5rem" id="mqttDetails">broker.hivemq.com:8884</div>
+  <div class="mqtt-status mqtt-disconnected" id="mqttStatus">🔴 MQTT Disconnected</div>
+  <div style="font-size:.8rem;color:#aaa;margin-top:.5rem" id="mqttDetails">Connecting...</div>
 </div>
 <div class="panel voice-panel" id="voicePanel">
   <h3 style="margin-bottom:.5rem">🎙️ Voice Command</h3>
@@ -127,12 +126,12 @@ h1{font-size:1.2rem;display:flex;align-items:center;gap:10px}
 </div>
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
 <script>
 // ========================================
 // ROLE-BASED ACCESS CONTROL SYSTEM
 // ========================================
 
-// Current user session
 let currentUser = {
   username: '',
   role: '',
@@ -140,7 +139,6 @@ let currentUser = {
   permissions: {}
 };
 
-// Role permissions configuration
 const ROLE_PERMISSIONS = {
   admin: {
     canControl: true,
@@ -174,7 +172,6 @@ const ROLE_PERMISSIONS = {
   }
 };
 
-// Check authentication and load user session
 function checkAuthentication() {
   const username = sessionStorage.getItem('username');
   const role = sessionStorage.getItem('role');
@@ -182,12 +179,10 @@ function checkAuthentication() {
   const sessionTimestamp = sessionStorage.getItem('sessionTimestamp');
 
   if (!username || !role || !sessionTimestamp) {
-    // No valid session - redirect to login
     window.location.href = 'index.html';
     return false;
   }
 
-  // Check session expiry (24 hours)
   const SESSION_DURATION = 24 * 60 * 60 * 1000;
   const elapsed = Date.now() - parseInt(sessionTimestamp);
   
@@ -197,7 +192,6 @@ function checkAuthentication() {
     return false;
   }
 
-  // Set current user
   currentUser = {
     username: username,
     role: role,
@@ -205,18 +199,15 @@ function checkAuthentication() {
     permissions: ROLE_PERMISSIONS[role] || ROLE_PERMISSIONS.guest
   };
 
-  // Update UI with user info
   updateUserDisplay();
   applyRoleRestrictions();
   
   return true;
 }
 
-// Update user display in header
 function updateUserDisplay() {
   const userDisplay = document.getElementById('userDisplay');
   const roleIcon = document.getElementById('roleIcon');
-  
   const roleConfig = ROLE_PERMISSIONS[currentUser.role];
   
   if (roleConfig) {
@@ -230,70 +221,61 @@ function updateUserDisplay() {
   addLog(`🔑 Access Level: ${currentUser.role.toUpperCase()}`);
 }
 
-// Apply role-based restrictions to UI
 function applyRoleRestrictions() {
   const perms = currentUser.permissions;
 
-  // Control device toggles
   if (!perms.canControl) {
     addLog('⚠️ Guest access - Device control disabled');
   }
 
-  // Quick actions
   const quickActions = document.getElementById('quickActions');
   if (!perms.canUseQuickActions) {
-    quickActions.innerHTML = `
-      <div class="access-denied">
-        🔒 Quick Actions require User/Admin role
-      </div>
-    `;
+    quickActions.innerHTML = `<div class="access-denied">🔒 Quick Actions require Admin role</div>`;
   }
 
-  // Voice commands
-  const voicePanel = document.getElementById('voicePanel');
   if (!perms.canUseVoice) {
     document.getElementById('voiceBtn').disabled = true;
     document.getElementById('continuousBtn').disabled = true;
-    document.getElementById('voiceResult').innerHTML = `
-      <div style="color:#ff6b6b;text-align:center">
-        🔒 Voice commands require User/Admin role
-      </div>
-    `;
+    document.getElementById('voiceResult').innerHTML = `<div style="color:#ff6b6b;text-align:center">🔒 Voice commands require User/Admin role</div>`;
   }
 
-  // Activity logs
   if (!perms.canViewLogs) {
-    document.getElementById('logBox').innerHTML = `
-      <p style="color:#ff6b6b;text-align:center">
-        🔒 Activity logs require User/Admin role
-      </p>
-    `;
+    document.getElementById('logBox').innerHTML = `<p style="color:#ff6b6b;text-align:center">🔒 Activity logs require User/Admin role</p>`;
   }
 
-  // Weather access (all roles have this)
   if (!perms.canAccessWeather) {
     document.getElementById('weatherPanel').style.display = 'none';
   }
 }
 
-// Handle logout
 function handleLogout() {
   addLog('👋 Logging out...');
   
-  // Clear session
+  if(mqttClient && mqttConnected){
+    mqttClient.disconnect();
+    addLog("🔌 Disconnected from MQTT");
+  }
+  if(reconnectTimer) clearTimeout(reconnectTimer);
+  
   sessionStorage.clear();
   
-  // Redirect to login
   setTimeout(() => {
     window.location.href = 'index.html';
   }, 1000);
 }
 
 // ========================================
-// DEVICE CONTROL WITH PERMISSION CHECKS
+// MQTT CONFIGURATION - REAL CONNECTION
 // ========================================
+const MQTT_HOST = "broker.hivemq.com";
+const MQTT_PORT_WSS = 8884;
+const MQTT_TOPIC_CONTROL = "smarthome/control";
+const MQTT_TOPIC_STATUS = "smarthome/status";
+const MQTT_TOPIC_LED_CONTROL = "smarthome/led/control";
 
-let mqttConnected = true;
+let mqttClient = null;
+let mqttConnected = false;
+let reconnectTimer = null;
 let autoRestartEnabled = false;
 let recognition = null;
 let isListening = false;
@@ -306,7 +288,7 @@ let weatherData = {
   windSpeed: 12.3,
   windDirection: "NE",
   city: "Bengaluru",
-  lastUpdate: new Date().toLocaleString(),
+  lastUpdate: new Date().toLocaleTimeString(),
   isValid: true
 };
 
@@ -314,16 +296,165 @@ const rooms = [
  { name: "Kitchen", devices: [{ id: "kitchen_light", label: "Light", color: "#34d399", state: false, isReal: true }], temperature: 28.5 },
  { name: "Bedroom 1", devices: [{ id: "bed1_light", label: "Light", color: "#ffd166", state: false, isReal: true }]},
  { name: "Living Hall", devices: [{ id: "living_light", label: "Light", color: "#ff4d4d", state: false, isReal: true }]},
+ { name: "LED Control", devices: [{ id: "led", label: "LED Strip", color: "#7f8cff", state: false, isReal: true }]},
  { name: "Buzzer Control", devices: [{ id: "buzzer", label: "Buzzer", color: "#ff3333", state: false, isBuzzer: true, isReal: true }]}
 ];
 
+// ========================================
+// MQTT CONNECTION WITH REAL BROKER
+// ========================================
+function connectMQTT() {
+  const clientId = "SmartHomeDashboard_" + Math.random().toString(16).substr(2, 8);
+  
+  addLog(`🔌 Connecting to ${MQTT_HOST}:${MQTT_PORT_WSS}...`);
+  document.getElementById("mqttDetails").textContent = `Connecting to ${MQTT_HOST}...`;
+  
+  mqttClient = new Paho.MQTT.Client(MQTT_HOST, MQTT_PORT_WSS, clientId);
+
+  mqttClient.onConnectionLost = (responseObject) => {
+    mqttConnected = false;
+    updateMQTTStatus(false);
+    addLog(`❌ Connection lost: ${responseObject.errorMessage}`);
+    
+    if(reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(connectMQTT, 5000);
+  };
+
+  mqttClient.onMessageArrived = (message) => {
+    const topic = message.destinationName;
+    const payload = message.payloadString;
+    
+    console.log(`📥 MQTT Message [${topic}]: ${payload}`);
+    
+    try { 
+      const data = JSON.parse(payload);
+      updateDeviceStatesFromMQTT(data);
+      addLog(`📥 Status updated from ESP32`);
+    }
+    catch(e) { 
+      console.log("Non-JSON message:", payload);
+      addLog(`📥 ${topic}: ${payload}`);
+    }
+  };
+
+  mqttClient.connect({
+    useSSL: true,
+    timeout: 10,
+    keepAliveInterval: 60,
+    cleanSession: true,
+    onSuccess: () => {
+      mqttConnected = true;
+      updateMQTTStatus(true);
+      addLog("✅ MQTT connected successfully!");
+      
+      mqttClient.subscribe(MQTT_TOPIC_STATUS);
+      mqttClient.subscribe(MQTT_TOPIC_CONTROL);
+      addLog(`📡 Subscribed to ${MQTT_TOPIC_STATUS}`);
+      
+      publishMQTT("status");
+      
+      document.getElementById("mqttDetails").textContent = `Connected to ${MQTT_HOST}`;
+    },
+    onFailure: (error) => {
+      mqttConnected = false;
+      updateMQTTStatus(false);
+      addLog(`❌ Connection failed: ${error.errorMessage}`);
+      document.getElementById("mqttDetails").textContent = `Failed: ${error.errorMessage}`;
+      
+      if(reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(connectMQTT, 5000);
+    }
+  });
+}
+
+function updateMQTTStatus(connected){
+  const s = document.getElementById("mqttStatus");
+  s.textContent = connected ? "🟢 MQTT Connected" : "🔴 MQTT Disconnected";
+  s.className = "mqtt-status " + (connected ? "mqtt-connected" : "mqtt-disconnected");
+}
+
+function publishMQTT(cmd){
+  if(!mqttConnected || !mqttClient){
+    addLog("⚠️ MQTT not connected - cannot send command");
+    return false;
+  }
+  
+  try {
+    const message = new Paho.MQTT.Message(cmd);
+    message.destinationName = MQTT_TOPIC_CONTROL;
+    message.qos = 0;
+    message.retained = false;
+    
+    mqttClient.send(message);
+    addLog(`📤 Sent: ${cmd}`);
+    console.log(`📤 Published to ${MQTT_TOPIC_CONTROL}: ${cmd}`);
+    return true;
+  } catch(e) {
+    addLog(`❌ Failed to publish: ${e.message}`);
+    return false;
+  }
+}
+
+function updateDeviceStatesFromMQTT(data){
+  console.log("Updating device states:", data);
+  
+  ["living_light", "kitchen_light", "bed1_light", "led", "buzzer"].forEach(id => {
+    if(data[id] !== undefined){
+      const dev = findDevice(id);
+      if(dev){
+        const newState = data[id] === "on" || data[id] === true;
+        if(dev.state !== newState) {
+          dev.state = newState;
+          console.log(`Updated ${id} to ${newState}`);
+        }
+      }
+    }
+  });
+  
+  if(data.temperature !== undefined) {
+    const kitchen = rooms.find(r => r.name === "Kitchen");
+    if(kitchen) {
+      kitchen.temperature = parseFloat(data.temperature);
+    }
+  }
+  
+  render();
+}
+
+function findDevice(id){
+  for(const r of rooms){
+    const d = r.devices.find(x => x.id === id);
+    if(d) return d;
+  }
+  return null;
+}
+
+function addLog(msg){
+  if (!currentUser.permissions.canViewLogs) {
+    return;
+  }
+
+  const t = new Date().toLocaleTimeString();
+  const p = document.createElement('p');
+  p.textContent = `[${t}] ${msg}`;
+  logBox.appendChild(p);
+  logBox.scrollTop = logBox.scrollHeight;
+  
+  while(logBox.children.length > 50) {
+    logBox.removeChild(logBox.firstChild);
+  }
+}
+
+// ========================================
+// WEATHER
+// ========================================
 function getWeatherIcon(condition) {
   if (!condition) return "🌡️";
   const c = condition.toLowerCase();
   if (c.includes("clear")) return "☀️";
-  if (c.includes("partly cloudy") || c.includes("mainly clear")) return "⛅";
-  if (c.includes("cloudy") || c.includes("overcast")) return "☁️";
-  if (c.includes("rain") || c.includes("drizzle")) return "🌧️";
+  if (c.includes("partly cloudy")) return "⛅";
+  if (c.includes("cloudy")) return "☁️";
+  if (c.includes("rain")) return "🌧️";
   if (c.includes("snow")) return "❄️";
   if (c.includes("thunder")) return "⛈️";
   if (c.includes("fog")) return "🌫️";
@@ -380,7 +511,7 @@ function refreshWeather() {
     weatherData.windSpeed = 5 + Math.random() * 20;
     const conditions = ["Clear sky", "Partly cloudy", "Overcast", "Rain", "Thunderstorm"];
     weatherData.condition = conditions[Math.floor(Math.random() * conditions.length)];
-    weatherData.lastUpdate = new Date().toLocaleString();
+    weatherData.lastUpdate = new Date().toLocaleTimeString();
     
     updateWeatherDisplay();
     
@@ -388,7 +519,7 @@ function refreshWeather() {
     if (kitchen) kitchen.temperature = weatherData.temperature;
     render();
     
-    addLog("✅ Weather data updated successfully!");
+    addLog("✅ Weather data updated!");
     btn.disabled = false;
     btn.textContent = "🔄 Refresh";
   }, 1500);
@@ -400,30 +531,24 @@ function updateTimePrompt() {
   let icon, greeting, suggestion;
   
   if (hour >= 6 && hour < 12) {
-    icon = "☀️";
-    greeting = "Good morning!";
-    suggestion = "Start your day bright";
+    icon = "☀️"; greeting = "Good morning!"; suggestion = "Start your day bright";
   } else if (hour >= 12 && hour < 17) {
-    icon = "🍽️";
-    greeting = "Afternoon!";
-    suggestion = "Consider kitchen lighting";
+    icon = "🍽️"; greeting = "Afternoon!"; suggestion = "Consider kitchen lighting";
   } else if (hour >= 17 && hour < 21) {
-    icon = "🌆";
-    greeting = "Evening time!";
-    suggestion = "Turn on hall light";
+    icon = "🌆"; greeting = "Evening time!"; suggestion = "Turn on hall light";
   } else {
-    icon = "🌙";
-    greeting = "Night mode";
-    suggestion = "Consider bedroom light";
+    icon = "🌙"; greeting = "Night mode"; suggestion = "Consider bedroom light";
   }
   
-  const promptDiv = document.getElementById("timePrompt");
-  promptDiv.innerHTML = `
+  document.getElementById("timePrompt").innerHTML = `
     <h3>${icon} ${greeting}, ${currentUser.username}!</h3>
     <p>${suggestion}</p>
   `;
 }
 
+// ========================================
+// VOICE COMMANDS
+// ========================================
 function startVoiceCommand() {
   if (!currentUser.permissions.canUseVoice) {
     addLog('❌ Voice commands require User or Admin role');
@@ -431,7 +556,7 @@ function startVoiceCommand() {
   }
 
   if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-    document.getElementById("voiceResult").textContent = "⚠️ Voice not supported in this browser";
+    document.getElementById("voiceResult").textContent = "⚠️ Voice not supported";
     addLog("⚠️ Voice recognition requires Chrome/Edge");
     return;
   }
@@ -444,15 +569,13 @@ function startVoiceCommand() {
     
     recognition.onstart = () => {
       isListening = true;
-      document.getElementById("voiceBtn").textContent = "⏹️ Stop Listening";
+      document.getElementById("voiceBtn").textContent = "⏹️ Stop";
       document.getElementById("voiceBtn").style.background = "#ff4444";
       addLog("🎤 Voice recognition started");
     };
     
     recognition.onresult = (event) => {
-      const transcript = Array.from(event.results)
-        .map(result => result[0].transcript)
-        .join('');
+      const transcript = Array.from(event.results).map(result => result[0].transcript).join('');
       document.getElementById("voiceResult").textContent = `🎤 Heard: "${transcript}"`;
       processVoiceCommand(transcript.toLowerCase());
     };
@@ -503,95 +626,92 @@ function toggleContinuousMode() {
 }
 
 function processVoiceCommand(input) {
-  const patterns = {
-    'kitchen_light_on': [/kitchen.*on/, /turn on.*kitchen/],
-    'kitchen_light_off': [/kitchen.*off/, /turn off.*kitchen/],
-    'bed1_light_on': [/bed(room)?.*on/, /turn on.*bed/],
-    'bed1_light_off': [/bed(room)?.*off/, /turn off.*bed/],
-    'living_light_on': [/living.*on/, /hall.*on/],
-    'living_light_off': [/living.*off/, /hall.*off/],
-    'all_on': [/all.*on/, /everything.*on/],
-    'all_off': [/all.*off/, /everything.*off/],
-    'buzzer_on': [/buzz(er)?/, /alarm/],
-    'weather_update': [/weather/, /refresh weather/]
-  };
-  
   let command = null;
-  for (const [cmd, regexList] of Object.entries(patterns)) {
-    for (const regex of regexList) {
-      if (regex.test(input)) {
-        command = cmd;
-        break;
-      }
-    }
-    if (command) break;
-  }
   
-  if (command) {
+  if(input.includes("kitchen") && (input.includes("on") || input.includes("turn on"))) 
+    command = "kitchen_light_on";
+  else if(input.includes("kitchen") && (input.includes("off") || input.includes("turn off"))) 
+    command = "kitchen_light_off";
+  else if(input.includes("bedroom") && (input.includes("on") || input.includes("turn on"))) 
+    command = "bed1_light_on";
+  else if(input.includes("bedroom") && (input.includes("off") || input.includes("turn off"))) 
+    command = "bed1_light_off";
+  else if(input.includes("living") && (input.includes("on") || input.includes("turn on"))) 
+    command = "living_light_on";
+  else if(input.includes("living") && (input.includes("off") || input.includes("turn off"))) 
+    command = "living_light_off";
+  else if(input.includes("led") && (input.includes("on") || input.includes("turn on"))) 
+    command = "led_on";
+  else if(input.includes("led") && (input.includes("off") || input.includes("turn off"))) 
+    command = "led_off";
+  else if(input.includes("all") && (input.includes("on") || input.includes("turn on"))) 
+    command = "all_on";
+  else if(input.includes("all") && (input.includes("off") || input.includes("turn off"))) 
+    command = "all_off";
+  else if(input.includes("buzzer") || input.includes("alarm")) 
+    command = "buzzer_on";
+  else if(input.includes("weather"))
+    command = "weather_update";
+  
+  if(command){
+    document.getElementById("voiceResult").textContent = `✅ Executing: ${command}`;
     sendCommand(command);
   } else {
+    document.getElementById("voiceResult").textContent = `❓ Unknown: "${input}"`;
     addLog(`❓ Unknown voice command: "${input}"`);
   }
 }
 
+// ========================================
+// DEVICE CONTROL
+// ========================================
 function sendCommand(cmd) {
-  // Check permissions for control commands
   if ((cmd !== 'weather_update') && !currentUser.permissions.canControl) {
     addLog(`❌ Access denied - ${currentUser.role} cannot control devices`);
-    alert('🔒 You do not have permission to control devices.\nPlease login as User or Admin.');
+    alert('🔒 You do not have permission to control devices.');
     return;
   }
 
-  // Check quick actions permission
   if ((cmd === 'all_on' || cmd === 'all_off') && !currentUser.permissions.canUseQuickActions) {
     addLog(`❌ Access denied - Quick actions require Admin role`);
     alert('🔒 Quick actions are restricted to Administrators only.');
     return;
   }
 
-  addLog(`📤 ${currentUser.username} sent command: ${cmd}`);
-  
-  if (cmd === "all_on") {
-    rooms.forEach(r => r.devices.forEach(d => {
-      if (!d.isBuzzer) d.state = true;
-    }));
-  } else if (cmd === "all_off") {
-    rooms.forEach(r => r.devices.forEach(d => {
-      if (!d.isBuzzer) d.state = false;
-    }));
-  } else if (cmd === "weather_update") {
+  if (cmd === "weather_update") {
     refreshWeather();
     return;
-  } else if (cmd === "buzzer_on") {
-    addLog("🔔 Buzzer activated!");
-    setTimeout(() => addLog("🔔 Buzzer stopped"), 500);
-  } else {
-    const parts = cmd.split('_');
-    const deviceId = parts.slice(0, -1).join('_');
-    const action = parts[parts.length - 1];
-    
-    rooms.forEach(r => r.devices.forEach(d => {
-      if (d.id === deviceId) {
-        d.state = (action === "on");
-      }
-    }));
   }
+
+  addLog(`📤 ${currentUser.username} sent: ${cmd}`);
   
-  addLog(`✅ Command executed: ${cmd}`);
-  render();
-}
-
-function addLog(msg) {
-  if (!currentUser.permissions.canViewLogs) {
-    return;
+  if(publishMQTT(cmd)){
+    if (cmd === "all_on") {
+      rooms.forEach(r => r.devices.forEach(d => { if (!d.isBuzzer) d.state = true; }));
+    } else if (cmd === "all_off") {
+      rooms.forEach(r => r.devices.forEach(d => { if (!d.isBuzzer) d.state = false; }));
+    } else if (cmd === "buzzer_on") {
+      const buzzer = findDevice("buzzer");
+      if(buzzer) buzzer.state = true;
+      addLog("🔔 Buzzer activated!");
+      setTimeout(() => {
+        if(buzzer) buzzer.state = false;
+        render();
+      }, 2000);
+    } else {
+      const parts = cmd.split('_');
+      const deviceId = parts.slice(0, -1).join('_');
+      const action = parts[parts.length - 1];
+      
+      const dev = findDevice(deviceId);
+      if(dev) {
+        dev.state = (action === "on");
+      }
+    }
+    
+    render();
+    updateSummary();
   }
-
-  const t = new Date().toLocaleTimeString();
-  const p = document.createElement('p');
-  p.textContent = `[${t}] ${msg}`;
-  logBox.appendChild(p);
-  logBox.scrollTop = logBox.scrollHeight;
-  while(logBox.children.length > 50) logBox.removeChild(logBox.firstChild);
 }
 
 function render() {
@@ -616,6 +736,7 @@ function render() {
       
       if(d.label === "Light") ind.textContent = "💡";
       else if(d.isBuzzer) ind.textContent = "🔔";
+      else if(d.id === "led") ind.textContent = "🌈";
       
       const lbl = document.createElement("div");
       lbl.innerHTML = d.label + ' <span class="device-info">ESP32</span>';
@@ -623,10 +744,8 @@ function render() {
       const tg = document.createElement("div");
       tg.className = "toggle " + (d.state ? "on" : "");
       
-      // Apply permission check
       if (!currentUser.permissions.canControl) {
         tg.classList.add('disabled');
-        tg.style.cursor = 'not-allowed';
       } else {
         tg.onclick = () => {
           const newState = !d.state;
@@ -643,7 +762,7 @@ function render() {
       if(d.state && !d.isBuzzer) onCount++;
     });
     
-    if(r.name === "Kitchen" && r.temperature !== null) {
+    if(r.name === "Kitchen" && r.temperature !== undefined) {
       const t = document.createElement("div");
       t.className = "temp-panel";
       t.textContent = `🌡️ ${r.temperature.toFixed(1)} °C`;
@@ -656,29 +775,43 @@ function render() {
   document.getElementById("summary").textContent = `${onCount} ON`;
 }
 
-// Initialize
+function updateSummary(){
+  let onCount = 0;
+  rooms.forEach(r => r.devices.forEach(d => {
+    if(d.state && !d.isBuzzer) onCount++;
+  }));
+  
+  const e = document.getElementById("summary");
+  e.textContent = `${onCount} ON`;
+}
+
+function requestStatus() {
+  if(mqttConnected) {
+    publishMQTT("status");
+  }
+}
+
+// ========================================
+// INITIALIZATION
+// ========================================
 if (checkAuthentication()) {
   render();
   updateTimePrompt();
   updateWeatherDisplay();
+  connectMQTT();
+  
   setInterval(updateTimePrompt, 60000);
+  setInterval(requestStatus, 30000);
 
   addLog("🚀 Dashboard initialized");
-  addLog("📍 MQTT Broker: broker.hivemq.com:8884");
-  addLog("✅ Connected to ESP32 (Demo Mode)");
+  addLog(`📍 Broker: ${MQTT_HOST}:${MQTT_PORT_WSS}`);
+  addLog(`📡 Topics: ${MQTT_TOPIC_CONTROL}, ${MQTT_TOPIC_STATUS}`);
   
   if (currentUser.permissions.canControl) {
     addLog("💡 Click toggles or use voice commands");
   } else {
     addLog("👁️ View-only mode - Device control disabled");
   }
-
-  // Simulate periodic status updates
-  setInterval(() => {
-    if (currentUser.permissions.canViewLogs) {
-      addLog("📥 Periodic status sync from ESP32");
-    }
-  }, 30000);
 }
 </script>
 </body>
