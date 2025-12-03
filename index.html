@@ -621,6 +621,18 @@
             }
         }
 
+        /* Role Info Box */
+        .role-info {
+            margin-top: 1rem;
+            padding: 0.8rem;
+            background: rgba(0, 255, 255, 0.05);
+            border-radius: 8px;
+            border-left: 3px solid #00ffff;
+            font-size: 0.75rem;
+            color: #94a3b8;
+            line-height: 1.4;
+        }
+
         /* Responsive */
         @media (max-width: 968px) {
             .home-container {
@@ -723,6 +735,13 @@
                 </button>
 
                 <div class="status-display" id="statusDisplay"></div>
+
+                <div class="role-info">
+                    <strong>Test Credentials:</strong><br>
+                    👑 Admin: admin / admin@123 (Full control)<br>
+                    🧰 User: user / user@123 (Control devices)<br>
+                    👁️ Guest: guest / guest@123 (View only)
+                </div>
             </form>
         </div>
     </div>
@@ -750,20 +769,24 @@
         const roleSelect = document.getElementById('role');
         const doorAnimation = document.getElementById('doorAnimation');
 
-        // ESP32 IP Address
-        const ESP32_IP = '192.168.1.100';
+        // Valid credentials with role-based authentication
+        const validCredentials = {
+            admin: { password: 'admin@123', fullName: 'System Administrator' },
+            user: { password: 'user@123', fullName: 'Standard User' },
+            guest: { password: 'guest@123', fullName: 'Guest User' }
+        };
 
-        // Check existing session
+        // Check existing session on page load
         const checkExistingSession = () => {
-            const savedUsername = localStorage.getItem('username');
-            const savedRole = localStorage.getItem('role');
-            const sessionTimestamp = localStorage.getItem('sessionTimestamp');
-            const SESSION_DURATION = 24 * 60 * 60 * 1000;
+            const savedUsername = sessionStorage.getItem('username');
+            const savedRole = sessionStorage.getItem('role');
+            const sessionTimestamp = sessionStorage.getItem('sessionTimestamp');
+            const SESSION_DURATION = 24 * 60 * 60 * 1000; // 24 hours
 
             if (savedUsername && savedRole && sessionTimestamp) {
                 const elapsed = Date.now() - parseInt(sessionTimestamp);
                 if (elapsed < SESSION_DURATION) {
-                    statusDisplay.textContent = '🔓 Session active. Opening doors...';
+                    statusDisplay.textContent = `🔓 Session active for ${savedUsername}. Redirecting...`;
                     statusDisplay.className = 'status-display success';
                     setTimeout(() => openDoorAndRedirect(), 1000);
                     return true;
@@ -772,43 +795,7 @@
             return false;
         };
 
-        // Auto-login check
-        const checkAutoLogin = async () => {
-            try {
-                statusDisplay.textContent = '🔍 Scanning network...';
-                statusDisplay.className = 'status-display checking';
-
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 3000);
-
-                const response = await fetch(`http://${ESP32_IP}/status`, {
-                    method: 'GET',
-                    signal: controller.signal,
-                    mode: 'cors'
-                });
-
-                clearTimeout(timeoutId);
-
-                if (response.ok) {
-                    statusDisplay.textContent = `✅ ESP32 detected. Auto-login enabled.`;
-                    statusDisplay.className = 'status-display success';
-
-                    localStorage.setItem('username', 'Auto User');
-                    localStorage.setItem('role', 'admin');
-                    localStorage.setItem('sessionTimestamp', Date.now().toString());
-                    localStorage.setItem('autoLogin', 'true');
-
-                    setTimeout(() => openDoorAndRedirect(), 1500);
-                    return true;
-                }
-            } catch (error) {
-                statusDisplay.textContent = '🔑 Manual authentication required';
-                statusDisplay.className = 'status-display';
-            }
-            return false;
-        };
-
-        // Door opening animation
+        // Door opening animation and redirect
         const openDoorAndRedirect = () => {
             doorAnimation.classList.add('active');
 
@@ -817,7 +804,7 @@
             }, 2000);
         };
 
-        // Toggle password
+        // Toggle password visibility
         togglePwd.onclick = () => {
             if (pwd.type === 'password') {
                 pwd.type = 'text';
@@ -828,7 +815,7 @@
             }
         };
 
-        // Form submission
+        // Form submission handler
         form.onsubmit = (e) => {
             e.preventDefault();
 
@@ -836,51 +823,48 @@
             const role = roleSelect.value;
             const password = pwd.value;
 
+            // Clear previous status
             statusDisplay.textContent = '';
             statusDisplay.className = 'status-display';
 
+            // Validate input
             if (!username || !password) {
-                statusDisplay.textContent = '⚠️ All fields required';
+                statusDisplay.textContent = '⚠️ All fields are required';
                 statusDisplay.className = 'status-display error';
                 return;
             }
 
-            const validCredentials = {
-                admin: 'admin@123',
-                user: 'user@123',
-                guest: 'guest@123'
-            };
-
-            if (password !== validCredentials[role]) {
-                statusDisplay.textContent = '❌ Invalid credentials';
+            // Validate credentials
+            if (!validCredentials[role] || password !== validCredentials[role].password) {
+                statusDisplay.textContent = '❌ Invalid credentials for selected role';
                 statusDisplay.className = 'status-display error';
                 pwd.value = '';
                 pwd.focus();
                 return;
             }
 
-            // Success
+            // Authentication successful
             accessBtn.disabled = true;
             btnText.innerHTML = 'Verifying<span class="spinner"></span>';
             statusDisplay.textContent = '✅ Authentication successful';
             statusDisplay.className = 'status-display success';
 
-            localStorage.setItem('username', username);
-            localStorage.setItem('role', role);
-            localStorage.setItem('sessionTimestamp', Date.now().toString());
+            // Store user session data
+            sessionStorage.setItem('username', username);
+            sessionStorage.setItem('role', role);
+            sessionStorage.setItem('fullName', validCredentials[role].fullName);
+            sessionStorage.setItem('sessionTimestamp', Date.now().toString());
 
+            // Redirect after animation
             setTimeout(() => {
                 statusDisplay.textContent = '🚪 Opening doors...';
                 setTimeout(() => openDoorAndRedirect(), 500);
             }, 1000);
         };
 
-        // Initialize
-        window.onload = async () => {
-            if (checkExistingSession()) return;
-
-            const autoLoggedIn = await checkAutoLogin();
-            if (!autoLoggedIn) {
+        // Initialize on page load
+        window.onload = () => {
+            if (!checkExistingSession()) {
                 usernameInput.focus();
             }
         };
