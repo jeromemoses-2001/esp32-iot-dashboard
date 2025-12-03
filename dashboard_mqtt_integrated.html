@@ -283,13 +283,13 @@ let isListening = false;
 const logBox = document.getElementById("logBox");
 
 let weatherData = {
-  temperature: 28.5,
-  condition: "Clear sky",
-  windSpeed: 12.3,
-  windDirection: "NE",
-  city: "Bengaluru",
-  lastUpdate: new Date().toLocaleTimeString(),
-  isValid: true
+  temperature: 0,
+  condition: "Waiting for data...",
+  windSpeed: 0,
+  windDirection: "N/A",
+  city: "Unknown",
+  lastUpdate: "",
+  isValid: false
 };
 
 const rooms = [
@@ -351,7 +351,14 @@ function connectMQTT() {
       mqttClient.subscribe(MQTT_TOPIC_CONTROL);
       addLog(`📡 Subscribed to ${MQTT_TOPIC_STATUS}`);
       
+      // Request initial status from ESP32
       publishMQTT("status");
+      
+      // Request weather data from ESP32
+      setTimeout(() => {
+        addLog("🌤️ Requesting initial weather data from ESP32...");
+        publishMQTT("weather_update");
+      }, 2000);
       
       document.getElementById("mqttDetails").textContent = `Connected to ${MQTT_HOST}`;
     },
@@ -398,6 +405,7 @@ function publishMQTT(cmd){
 function updateDeviceStatesFromMQTT(data){
   console.log("Updating device states:", data);
   
+  // Update device states
   ["living_light", "kitchen_light", "bed1_light", "led", "buzzer"].forEach(id => {
     if(data[id] !== undefined){
       const dev = findDevice(id);
@@ -411,11 +419,42 @@ function updateDeviceStatesFromMQTT(data){
     }
   });
   
+  // Update temperature in Kitchen room
   if(data.temperature !== undefined) {
     const kitchen = rooms.find(r => r.name === "Kitchen");
     if(kitchen) {
       kitchen.temperature = parseFloat(data.temperature);
     }
+  }
+  
+  // Update weather data from ESP32
+  if(data.temperature !== undefined || data.weather_condition !== undefined) {
+    weatherData.isValid = true;
+    
+    if(data.temperature !== undefined) {
+      weatherData.temperature = parseFloat(data.temperature);
+    }
+    if(data.weather_condition !== undefined) {
+      weatherData.condition = data.weather_condition;
+    }
+    if(data.wind_speed !== undefined) {
+      weatherData.windSpeed = parseFloat(data.wind_speed);
+    }
+    if(data.wind_direction !== undefined) {
+      weatherData.windDir = data.wind_direction;
+    }
+    if(data.city !== undefined) {
+      weatherData.city = data.city;
+    }
+    if(data.weather_update !== undefined) {
+      weatherData.lastUpdate = data.weather_update;
+    } else {
+      weatherData.lastUpdate = new Date().toLocaleString();
+    }
+    
+    console.log("Weather data updated from ESP32:", weatherData);
+    addLog(`🌤️ Weather updated: ${weatherData.temperature}°C, ${weatherData.condition}`);
+    updateWeatherDisplay();
   }
   
   render();
